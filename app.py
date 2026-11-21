@@ -6,15 +6,12 @@ import streamlit as st
 
 from processamento import obter_dados
 
-# ---------------------------------------------------------------------------
-# PALETA
-# ---------------------------------------------------------------------------
 INK = "#000000"
 MUTED = "#000000"
 LINE = "#E3E6EC"
 BG = "#F6F7F9"
-ABST = "#E4572E"
-TEAL = "#0F766E"
+ABST = "#E4572E"  # abstenção
+TEAL = "#0F766E"  # comparecimento / menor abstenção
 PALETTE = [ABST, TEAL, "#3B5BA9", "#C9962B", "#7A4E9E", "#4B9CD3", "#8C8C8C"]
 
 st.set_page_config(
@@ -61,15 +58,25 @@ div[data-testid="column"]:first-child [data-testid="stMetric"] {{ border-left-co
 
 [data-testid="stDataFrame"] {{ border: 1px solid {LINE}; border-radius: 10px; }}
 .stPlotlyChart {{ background: white; border: 1px solid {LINE}; border-radius: 10px; padding: 8px; }}
+
+/* Texto preto em toda a interface */
+.stApp h1, .stApp h2, .stApp h3, .stApp h4,
+.stApp p, .stApp li, .stApp label, .stApp label p,
+.stApp [data-testid="stMarkdownContainer"],
+.stApp [data-testid="stWidgetLabel"] p,
+.stApp [data-testid="stMetricLabel"] p,
+.stApp [data-testid="stMetricValue"],
+.stApp [data-baseweb="tab"],
+.stApp [data-baseweb="select"] div,
+.stApp [data-testid="stSidebar"] span,
+.stApp [data-testid="stExpander"] summary p,
+.subtitulo {{ color: #000000 !important; }}
 </style>
 """,
     unsafe_allow_html=True,
 )
 
 
-# ---------------------------------------------------------------------------
-# DADOS
-# ---------------------------------------------------------------------------
 @st.cache_data(show_spinner="Carregando dados...")
 def carregar(turno: int, excluir_exterior: bool, min_aptos: int):
     return obter_dados(
@@ -107,14 +114,18 @@ def adivinhar(colunas, candidatos, trechos):
     return None
 
 
+# Tabelas que NÃO aparecem no seletor (comparação por trecho do nome, sem acento/maiúscula)
+TABELAS_OCULTAS = ["COMPARATIVO_UFS", "FAIXAS_QUANTIDADE", "FAIXAS_PERCENTUAL"]
+
 NENHUMA = "(nenhuma)"
+ESCOLHA = "(escolha)"
 
 
 def escolher(rotulo, colunas, padrao, obrigatoria=False):
-    opcoes = list(colunas) if obrigatoria else [NENHUMA] + list(colunas)
+    opcoes = [ESCOLHA if obrigatoria else NENHUMA] + list(colunas)
     idx = opcoes.index(padrao) if padrao in opcoes else 0
     valor = st.selectbox(rotulo, opcoes, index=idx)
-    return None if valor == NENHUMA else valor
+    return None if valor in (NENHUMA, ESCOLHA) else valor
 
 
 def estilizar(fig, altura=400):
@@ -133,9 +144,6 @@ def estilizar(fig, altura=400):
     return fig
 
 
-# ---------------------------------------------------------------------------
-# CABEÇALHO
-# ---------------------------------------------------------------------------
 st.title("Análise comparativa da abstenção eleitoral")
 st.markdown(
     '<p class="subtitulo">Compare a abstenção entre anos, estados e municípios. '
@@ -143,9 +151,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ---------------------------------------------------------------------------
-# BARRA LATERAL: parâmetros da análise
-# ---------------------------------------------------------------------------
 with st.sidebar:
     st.header("Análise")
     turno = st.radio("Turno", [1, 2], horizontal=True)
@@ -161,7 +166,11 @@ except Exception as erro:
     st.exception(erro)
     st.stop()
 
-tabelas = achatar(resultado)
+tabelas = {
+    nome: tab
+    for nome, tab in achatar(resultado).items()
+    if not any(t in norm(nome) for t in TABELAS_OCULTAS)
+}
 if not tabelas:
     st.error(
         f"`obter_dados()` devolveu `{type(resultado).__name__}`, "
@@ -174,7 +183,13 @@ with st.sidebar:
         nome_tabela = st.selectbox("Tabela de dados", list(tabelas))
     else:
         nome_tabela = next(iter(tabelas))
-    bruto = tabelas[nome_tabela].reset_index()
+    bruto = tabelas[nome_tabela]
+    try:
+        # índice padrão (0,1,2...) é descartado; índices com nome viram colunas
+        bruto = bruto.reset_index(drop=isinstance(bruto.index, pd.RangeIndex))
+    except ValueError:  # índice com o mesmo nome de uma coluna
+        bruto = bruto.reset_index(drop=True)
+    bruto = bruto.loc[:, ~bruto.columns.duplicated()]
     cols = list(bruto.columns)
 
     with st.expander("Colunas dos dados"):
@@ -191,27 +206,44 @@ with st.sidebar:
             obrigatoria=True,
         )
 
-# ---------------------------------------------------------------------------
-# NORMALIZAÇÃO
-# ---------------------------------------------------------------------------
+if c_abst is None:
+    st.info("Escolha a coluna de abstenções em **Colunas dos dados**, na barra lateral.")
+    st.stop()
+
 tem_aptos = c_aptos is not None
-df = pd.DataFrame()
-df["ANO"] = pd.to_numeric(bruto[c_ano], errors="coerce") if c_ano else 0
-if c_ano and df["ANO"].isna().any():
-    df["ANO"] = bruto[c_ano].astype(str)
+df = pd.DataFrame(index=bruto.index)  # índice fixo: evita colunas vazias/NaN
+
+ano_num = pd.to_numeric(bruto[c_ano], errors="coerce") if c_ano else None
+ano_numerico = ano_num is not None and ano_num.notna().any()
+if ano_numerico:
+    df["ANO"] = ano_num
+else:
+    df["ANO"] = bruto[c_ano].astype(str) if c_ano else "Único"
+
 df["UF"] = bruto[c_uf].astype(str) if c_uf else "Brasil"
 df["MUN"] = bruto[c_mun].astype(str) if c_mun else None
 df["ABST"] = pd.to_numeric(bruto[c_abst], errors="coerce")
 if tem_aptos:
     df["APTOS"] = pd.to_numeric(bruto[c_aptos], errors="coerce")
-    df = df[df["APTOS"] > 0]
+    df = df[df["APTOS"] > 0].copy()
     df["TAXA"] = df["ABST"] / df["APTOS"] * 100
 else:
     df["TAXA"] = df["ABST"]  # assume que a coluna já está em %
-df = df.dropna(subset=["ABST"])
+    maximo = df["TAXA"].max()
+    if maximo <= 1:  # proporção (0 a 1): converte para %
+        df["TAXA"] = df["TAXA"] * 100
+    elif maximo > 100:
+        st.warning(
+            "A coluna de abstenções tem valores acima de 100, então parece ser uma quantidade. "
+            "Escolha também a coluna de **Eleitores aptos** em *Colunas dos dados*."
+        )
 
+df = df.dropna(subset=["ABST", "ANO"]).copy()
+if ano_numerico:
+    df["ANO"] = df["ANO"].round().astype(int)
 if df.empty:
-    st.warning("Os dados ficaram vazios após o tratamento. Confira o mapeamento das colunas.")
+    st.warning("Os dados ficaram vazios após o tratamento. Confira o mapeamento das colunas "
+               "ou reduza o mínimo de eleitores aptos.")
     st.stop()
 
 
@@ -231,9 +263,6 @@ def taxa_total(d: pd.DataFrame) -> float:
     return d["TAXA"].mean()
 
 
-# ---------------------------------------------------------------------------
-# FILTROS
-# ---------------------------------------------------------------------------
 with st.sidebar:
     st.header("Filtros")
     anos_disp = sorted(df["ANO"].unique())
@@ -252,10 +281,7 @@ if dff.empty:
     st.warning("Nenhum dado para esse recorte. Amplie os filtros na barra lateral.")
     st.stop()
 
-# ---------------------------------------------------------------------------
-# INDICADORES
-# ---------------------------------------------------------------------------
-ano_ref = max(dff["ANO"])
+ano_ref = dff["ANO"].max()
 atual = dff[dff["ANO"] == ano_ref]
 anteriores = [a for a in dff["ANO"].unique() if a < ano_ref] if not isinstance(ano_ref, str) else []
 delta = None
@@ -275,14 +301,15 @@ if tem_aptos:
     c2.metric("Eleitores aptos", f"{int(atual['APTOS'].sum()):,}".replace(",", "."))
 else:
     c2.metric("Registros", f"{len(atual):,}".replace(",", "."))
-c3.metric("Menor abstenção", por_uf["UF"].iloc[0], f"{por_uf['TAXA'].iloc[0]:.1f}%", delta_color="off")
-c4.metric("Maior abstenção", por_uf["UF"].iloc[-1], f"{por_uf['TAXA'].iloc[-1]:.1f}%", delta_color="off")
+if por_uf.empty:
+    c3.metric("Menor abstenção", "-")
+    c4.metric("Maior abstenção", "-")
+else:
+    c3.metric("Menor abstenção", por_uf["UF"].iloc[0], f"{por_uf['TAXA'].iloc[0]:.1f}%", delta_color="off")
+    c4.metric("Maior abstenção", por_uf["UF"].iloc[-1], f"{por_uf['TAXA'].iloc[-1]:.1f}%", delta_color="off")
 
 st.write("")
 
-# ---------------------------------------------------------------------------
-# ABAS
-# ---------------------------------------------------------------------------
 aba1, aba2, aba3, aba4 = st.tabs(["Evolução", "Estados", "Municípios", "Dados"])
 
 with aba1:
