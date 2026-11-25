@@ -1,35 +1,25 @@
-
-# ============================================================
-# TESTE DO PROCESSAMENTO
-# ============================================================
-
+import pandas as pd
 from processamento import obter_dados
-
-
-# Executa as análises do primeiro turno.
 
 print("Iniciando processamento eleitoral...")
 
 resultados = obter_dados(
     turno=1,
-    excluir_exterior=False
+    excluir_exterior=False,
+    min_aptos=5000
 )
 
 print("\nProcessamento concluído!")
 
-
-# Exibe cada resultado.
-
-for nome, tabela in resultados.items():
+for nome, resultado in resultados.items():
 
     print(f"\n{'=' * 50}")
     print(nome.upper())
     print("=" * 50)
 
-    if tabela.empty:
-        print("Nenhum dado disponível.")
+    if isinstance(resultado, pd.DataFrame):
+        print(resultado.head(5))
+        print(f"Total de registros: {len(resultado)}")
+
     else:
-        print(tabela.head(10))
-
-
-print("\nTodos os testes foram executados!")
+        print(resultado)

@@ -1,3 +1,7 @@
+# ============================================================
+# 1. IMPORTAÇÕES
+# ============================================================
+
 import pandas as pd
 import numpy as np
 
@@ -8,16 +12,20 @@ from pathlib import Path
 # 2. CONFIGURAÇÕES
 # ============================================================
 
-# Localiza a pasta do projeto automaticamente.
+# Diretório onde está este arquivo.
 
-PASTA_PROJETO = Path(__file__).parent
+PASTA_PROJETO = Path(__file__).resolve().parent
 
-# Caminhos dos arquivos CSV.
+# Diretório onde estão os arquivos CSV.
+
+PASTA_DADOS = PASTA_PROJETO / "dados"
+
+# Arquivos utilizados na comparação.
 
 ARQUIVOS = {
-    2006: PASTA_PROJETO / "dados" / "detalhe_votacao_munzona_2006_BRASIL.csv",
-    2022: PASTA_PROJETO / "dados" / "detalhe_votacao_munzona_2022_BRASIL.csv",
-    2026: PASTA_PROJETO / "dados" / "detalhe_votacao_munzona_2026_BRASIL.csv"
+    2006: PASTA_DADOS / "detalhe_votacao_munzona_2006_BRASIL.csv",
+    2022: PASTA_DADOS / "detalhe_votacao_munzona_2022_BRASIL.csv",
+    2026: PASTA_DADOS / "detalhe_votacao_munzona_2026_BRASIL.csv"
 }
 
 # Configurações padrão.
@@ -33,37 +41,42 @@ MIN_APTOS = 5000
 
 def carregar_presidente(ano, caminho):
     """
-    Carrega o CSV de um ano e realiza a limpeza dos dados.
+    Carrega os dados eleitorais de determinado ano.
 
-    Mantém somente registros referentes ao cargo de presidente.
+    Mantém somente registros referentes ao cargo de presidente,
+    converte as colunas numéricas e remove registros inválidos.
 
-    Retorna um DataFrame com as colunas necessárias para análise.
+    Retorna um DataFrame padronizado.
     """
+
+    caminho = Path(caminho)
 
     # Verifica se o arquivo existe.
 
-    if not Path(caminho).exists():
+    if not caminho.exists():
         raise FileNotFoundError(
             f"Arquivo de {ano} não encontrado: {caminho}"
         )
 
     # Lê o CSV.
-    # O código do município é lido como texto para evitar
-    # problemas de identificação durante as comparações.
+    # Os códigos de identificação são mantidos como texto.
 
     df = pd.read_csv(
         caminho,
         sep=";",
         encoding="latin1",
         low_memory=False,
-        dtype={"CD_MUNICIPIO": "string"}
+        dtype={
+            "CD_MUNICIPIO": "string",
+            "SG_UF": "string"
+        }
     )
 
-    # Remove espaços extras dos nomes das colunas.
+    # Remove espaços dos nomes das colunas.
 
     df.columns = df.columns.str.strip()
 
-    # Verifica se as colunas necessárias existem.
+    # Verifica as colunas necessárias.
 
     colunas_obrigatorias = [
         "DS_CARGO",
@@ -85,9 +98,14 @@ def carregar_presidente(ano, caminho):
             f"Colunas ausentes no arquivo de {ano}: {faltantes}"
         )
 
-    # Limpa os espaços das colunas textuais.
+    # Limpa espaços das colunas textuais.
 
     for coluna in df.select_dtypes(include="object").columns:
+        df[coluna] = df[coluna].str.strip()
+
+    # Remove espaços das colunas do tipo string.
+
+    for coluna in ["CD_MUNICIPIO", "SG_UF"]:
         df[coluna] = df[coluna].str.strip()
 
     # Remove registros duplicados.
@@ -97,7 +115,7 @@ def carregar_presidente(ano, caminho):
     # Mantém somente os registros de presidente.
 
     df = df[
-        df["DS_CARGO"].astype("string").str.casefold()
+        df["DS_CARGO"].astype("string").str.strip().str.casefold()
         == "presidente"
     ].copy()
 
@@ -109,7 +127,7 @@ def carregar_presidente(ano, caminho):
             errors="coerce"
         )
 
-    # Remove registros sem informações essenciais.
+    # Remove registros sem informações necessárias.
 
     df = df.dropna(
         subset=[
@@ -129,11 +147,11 @@ def carregar_presidente(ano, caminho):
         & (df["QT_ABSTENCOES"] >= 0)
     ].copy()
 
-    # Identifica o ano dos dados.
+    # Identifica o ano eleitoral.
 
     df["ANO"] = ano
 
-    # Seleciona somente as colunas utilizadas no projeto.
+    # Seleciona as colunas utilizadas na análise.
 
     colunas_finais = [
         "ANO",
@@ -149,7 +167,96 @@ def carregar_presidente(ano, caminho):
 
 
 # ============================================================
-# 4. FUNÇÃO PRINCIPAL DE ANÁLISE
+# 4. FUNÇÃO AUXILIAR DE COMPARAÇÃO MUNICIPAL
+# ============================================================
+
+def comparar_municipios(mun, ano_anterior, ano_atual, min_aptos):
+    """
+    Compara a taxa de abstenção dos municípios entre dois anos.
+
+    Utiliza:
+        SG_UF + CD_MUNICIPIO como chave de identificação.
+
+    Calcula:
+        - Taxa no ano anterior;
+        - Taxa no ano atual;
+        - Variação em pontos percentuais;
+        - Maiores aumentos;
+        - Maiores quedas.
+
+    Considera o mínimo de eleitores aptos no ano atual.
+    """
+
+    chave = ["SG_UF", "CD_MUNICIPIO"]
+
+    # Seleciona os municípios do ano anterior.
+
+    dados_ant = mun[
+        mun["ANO"] == ano_anterior
+    ][
+        chave + [
+            "NM_MUNICIPIO",
+            "QT_APTOS",
+            "TAXA"
+        ]
+    ].copy()
+
+    # Seleciona os municípios do ano atual.
+
+    dados_atual = mun[
+        mun["ANO"] == ano_atual
+    ][
+        chave + [
+            "NM_MUNICIPIO",
+            "QT_APTOS",
+            "TAXA"
+        ]
+    ].copy()
+
+    # Junta os municípios presentes nos dois anos.
+
+    comparacao = dados_ant.merge(
+        dados_atual,
+        on=chave,
+        how="inner",
+        suffixes=(
+            f"_{ano_anterior}",
+            f"_{ano_atual}"
+        )
+    )
+
+    # Calcula a variação da taxa de abstenção.
+
+    comparacao["VAR_pp"] = (
+        comparacao[f"TAXA_{ano_atual}"]
+        - comparacao[f"TAXA_{ano_anterior}"]
+    )
+
+    # Filtra municípios com quantidade mínima de eleitores.
+
+    grandes = comparacao[
+        comparacao[f"QT_APTOS_{ano_atual}"] >= min_aptos
+    ].copy()
+
+    # Ordena os maiores aumentos.
+
+    aumentos = grandes.sort_values(
+        "VAR_pp",
+        ascending=False
+    ).head(15).copy()
+
+    # Ordena as maiores quedas.
+
+    quedas = grandes.sort_values(
+        "VAR_pp",
+        ascending=True
+    ).head(15).copy()
+
+    return comparacao, grandes, aumentos, quedas
+
+
+# ============================================================
+# 5. FUNÇÃO PRINCIPAL DE ANÁLISE
 # ============================================================
 
 def executar_analises(
@@ -159,53 +266,61 @@ def executar_analises(
     min_aptos=MIN_APTOS
 ):
     """
-    Executa todas as análises eleitorais.
+    Executa todas as análises presentes no notebook.
 
     Parâmetros:
-        arquivos: dicionário com os caminhos dos CSVs.
-        turno: turno eleitoral utilizado nas comparações.
-        excluir_exterior: remove ou não os dados do exterior.
-        min_aptos: mínimo de eleitores aptos para comparar
-                   os municípios com maiores variações.
+        arquivos:
+            Dicionário contendo os caminhos dos CSVs.
+
+        turno:
+            Turno eleitoral utilizado na análise.
+
+        excluir_exterior:
+            Se True, remove os registros com SG_UF == "ZZ".
+
+        min_aptos:
+            Quantidade mínima de eleitores aptos para as
+            tabelas de maiores aumentos e quedas.
 
     Retorna:
-        Dicionário contendo todos os DataFrames necessários
-        para a criação das tabelas e gráficos do Streamlit.
+        Dicionário com todos os DataFrames para o Streamlit.
     """
 
     # --------------------------------------------------------
-    # 4.1 CARREGAMENTO DOS ARQUIVOS
+    # 5.1 CARREGAMENTO DOS ARQUIVOS
     # --------------------------------------------------------
 
     if arquivos is None:
         arquivos = ARQUIVOS
 
-    # Carrega cada ano individualmente.
+    # Carrega os dados de cada ano.
 
     dfs = {
         ano: carregar_presidente(ano, caminho)
         for ano, caminho in arquivos.items()
     }
 
-    # Junta todos os anos em uma única base.
+    # Junta os arquivos em uma única base.
 
     base = pd.concat(
         dfs.values(),
         ignore_index=True
     )
 
-    # Identifica os anos realmente disponíveis.
+    # Identifica os anos disponíveis nos arquivos carregados.
 
     anos = sorted(base["ANO"].unique())
 
-    if not anos:
-        raise ValueError("Nenhum dado eleitoral foi encontrado.")
+    if len(anos) < 2:
+        raise ValueError(
+            "São necessários pelo menos dois anos para comparação."
+        )
 
     # --------------------------------------------------------
-    # 4.2 RESUMO COMPARATIVO ENTRE ANOS
+    # 5.2 RESUMO COMPARATIVO ENTRE ANOS E TURNOS
     # --------------------------------------------------------
 
-    # Agrupa por ano e turno.
+    # Agrupa os dados por ano e turno.
 
     diag = base.groupby(
         ["ANO", "NR_TURNO"]
@@ -213,37 +328,50 @@ def executar_analises(
         Zonas=("QT_APTOS", "size"),
         Aptos=("QT_APTOS", "sum"),
         Abstencoes=("QT_ABSTENCOES", "sum")
-    ).reset_index()
+    )
 
-    # Calcula a taxa de abstenção.
+    # Calcula a taxa percentual de abstenção.
 
     diag["Taxa (%)"] = (
         diag["Abstencoes"] / diag["Aptos"]
     ) * 100
 
     # --------------------------------------------------------
-    # 4.3 FILTRAGEM DO TURNO
+    # 5.3 FILTRAGEM DO TURNO
     # --------------------------------------------------------
 
     b = base[
         base["NR_TURNO"] == turno
     ].copy()
 
-    # Remove o exterior caso solicitado.
+    # Remove o exterior se solicitado.
 
     if excluir_exterior:
-        b = b[b["SG_UF"] != "ZZ"].copy()
+        b = b[
+            b["SG_UF"] != "ZZ"
+        ].copy()
 
     if b.empty:
         raise ValueError(
-            f"Não existem dados disponíveis para o turno {turno}."
+            f"Não existem dados para o turno {turno} "
+            "com os filtros selecionados."
+        )
+
+    # Atualiza os anos efetivamente presentes no turno.
+
+    anos_turno = sorted(b["ANO"].unique())
+
+    if len(anos_turno) < 2:
+        raise ValueError(
+            "O turno selecionado precisa ter dados "
+            "de pelo menos dois anos."
         )
 
     # --------------------------------------------------------
-    # 4.4 ANÁLISE POR MUNICÍPIO
+    # 5.4 AGRUPAMENTO MUNICIPAL
     # --------------------------------------------------------
 
-    # A identificação utiliza UF e código do município.
+    # Chave municipal: ano + UF + código do município.
 
     mun = b.groupby(
         ["ANO", "SG_UF", "CD_MUNICIPIO"],
@@ -254,14 +382,14 @@ def executar_analises(
         QT_ABSTENCOES=("QT_ABSTENCOES", "sum")
     )
 
-    # Taxa percentual de abstenção municipal.
+    # Calcula a taxa municipal de abstenção.
 
     mun["TAXA"] = (
         mun["QT_ABSTENCOES"] / mun["QT_APTOS"]
     ) * 100
 
     # --------------------------------------------------------
-    # 4.5 ANÁLISE POR UF
+    # 5.5 AGRUPAMENTO POR UNIDADE FEDERATIVA
     # --------------------------------------------------------
 
     uf = b.groupby(
@@ -272,14 +400,14 @@ def executar_analises(
         QT_ABSTENCOES=("QT_ABSTENCOES", "sum")
     )
 
-    # Calcula a taxa de cada estado.
+    # Calcula a taxa de abstenção de cada UF.
 
     uf["TAXA"] = (
         uf["QT_ABSTENCOES"] / uf["QT_APTOS"]
     ) * 100
 
     # --------------------------------------------------------
-    # 4.6 ANÁLISE NACIONAL
+    # 5.6 ANÁLISE NACIONAL
     # --------------------------------------------------------
 
     nacional = b.groupby("ANO").agg(
@@ -288,20 +416,20 @@ def executar_analises(
         Abstencoes=("QT_ABSTENCOES", "sum")
     )
 
-    # Taxa nacional de abstenção.
+    # Calcula a taxa nacional.
 
     nacional["Taxa (%)"] = (
         nacional["Abstencoes"] / nacional["Aptos"]
     ) * 100
 
-    # Variação em pontos percentuais entre anos consecutivos.
+    # Calcula a variação em pontos percentuais.
 
     nacional["Variação de pontos percentuais"] = (
         nacional["Taxa (%)"].diff()
     )
 
     # --------------------------------------------------------
-    # 4.7 COMPARATIVO ENTRE AS UFs
+    # 5.7 COMPARATIVO ENTRE UNIDADES FEDERATIVAS
     # --------------------------------------------------------
 
     # Transforma os anos em colunas.
@@ -312,15 +440,16 @@ def executar_analises(
         values="TAXA"
     )
 
-    # Calcula a variação entre anos consecutivos.
+    # Calcula as variações entre todos os anos consecutivos.
 
-    anos_uf = sorted(uf["ANO"].unique())
-
-    for anterior, atual in zip(anos_uf[:-1], anos_uf[1:]):
+    for anterior, atual in zip(
+        anos_turno[:-1],
+        anos_turno[1:]
+    ):
 
         coluna = (
             f"Variação de pontos percentuais "
-            f"{anterior} - {atual}"
+            f"{anterior} - {atual} "
         )
 
         taxa_uf[coluna] = (
@@ -329,14 +458,28 @@ def executar_analises(
 
     # Ordena pela taxa do ano mais recente.
 
-    if anos_uf:
-        taxa_uf = taxa_uf.sort_values(
-            anos_uf[-1],
-            ascending=False
-        )
+    taxa_uf = taxa_uf.sort_values(
+        anos_turno[-1],
+        ascending=False
+    )
+
+    # Variação entre os dois últimos anos.
+
+    coluna_variacao_recente = (
+        f"Variação de pontos percentuais "
+        f"{anos_turno[-2]} - {anos_turno[-1]} "
+    )
+
+    variacao_uf = taxa_uf[
+        [coluna_variacao_recente]
+    ].copy()
+
+    variacao_uf = variacao_uf.sort_values(
+        coluna_variacao_recente
+    )
 
     # --------------------------------------------------------
-    # 4.8 DISTRIBUIÇÃO DOS MUNICÍPIOS POR FAIXA
+    # 5.8 DISTRIBUIÇÃO DE MUNICÍPIOS POR FAIXA
     # --------------------------------------------------------
 
     limites = [
@@ -356,8 +499,8 @@ def executar_analises(
         "Acima de 10.000"
     ]
 
-    # Classifica cada município conforme a quantidade
-    # absoluta de abstenções.
+    # Classifica os municípios pela quantidade absoluta
+    # de abstenções.
 
     mun["FAIXA"] = pd.cut(
         mun["QT_ABSTENCOES"],
@@ -365,7 +508,7 @@ def executar_analises(
         labels=faixas
     )
 
-    # Conta municípios por faixa e ano.
+    # Conta os municípios em cada faixa por ano.
 
     cont = mun.groupby(
         ["FAIXA", "ANO"],
@@ -375,8 +518,7 @@ def executar_analises(
         fill_value=0
     )
 
-    # Calcula o percentual de municípios por faixa.
-    # A divisão é feita por ano, não pelo total geral.
+    # Calcula o percentual dentro de cada ano.
 
     pct = cont.div(
         cont.sum(axis=0).replace(0, np.nan),
@@ -384,125 +526,103 @@ def executar_analises(
     ) * 100
 
     # --------------------------------------------------------
-    # 4.9 DISTRIBUIÇÃO ESTATÍSTICA MUNICIPAL
+    # 5.9 DISTRIBUIÇÃO DAS TAXAS MUNICIPAIS
     # --------------------------------------------------------
 
-    # Estatísticas descritivas das taxas municipais.
+    # Os dados individuais serão utilizados pelo Streamlit
+    # para construir o boxplot.
+
+    distribuicao_municipal = mun[
+        ["ANO", "SG_UF", "NM_MUNICIPIO", "TAXA"]
+    ].copy()
+
+    # Estatísticas descritivas.
 
     estatisticas = mun.groupby(
         "ANO"
-    )["TAXA"].describe()
+    )["TAXA"].describe().round(2)
 
     # --------------------------------------------------------
-    # 4.10 COMPARAÇÃO ENTRE MUNICÍPIOS
+    # 5.10 COMPARAÇÃO DE LONGO PRAZO
     # --------------------------------------------------------
 
-    comparacao = pd.DataFrame()
-    aumentos = pd.DataFrame()
-    quedas = pd.DataFrame()
+    # O notebook original compara o primeiro e o último
+    # ano disponível (2006 e 2026, quando os três estão presentes).
 
-    anos_disponiveis = sorted(mun["ANO"].unique())
+    ano_inicial = anos_turno[0]
+    ano_final = anos_turno[-1]
 
-    # A comparação exige pelo menos dois anos.
-
-    if len(anos_disponiveis) >= 2:
-
-        # Seleciona os dois anos mais recentes.
-
-        anterior = anos_disponiveis[-2]
-        atual = anos_disponiveis[-1]
-
-        # Chave de identificação dos municípios.
-
-        chave = [
-            "SG_UF",
-            "CD_MUNICIPIO"
-        ]
-
-        # Dados do ano anterior.
-
-        dados_ant = mun[
-            mun["ANO"] == anterior
-        ][
-            chave + [
-                "NM_MUNICIPIO",
-                "QT_APTOS",
-                "TAXA"
-            ]
-        ].copy()
-
-        # Dados do ano atual.
-
-        dados_atual = mun[
-            mun["ANO"] == atual
-        ][
-            chave + [
-                "NM_MUNICIPIO",
-                "QT_APTOS",
-                "TAXA"
-            ]
-        ].copy()
-
-        # Mantém somente municípios presentes nos dois anos.
-
-        comparacao = dados_ant.merge(
-            dados_atual,
-            on=chave,
-            how="inner",
-            suffixes=(
-                f"_{anterior}",
-                f"_{atual}"
-            )
+    comp_longo, grandes_longo, aumentos_longo, quedas_longo = (
+        comparar_municipios(
+            mun,
+            ano_inicial,
+            ano_final,
+            min_aptos
         )
+    )
 
-        # Calcula a variação em pontos percentuais.
+    # --------------------------------------------------------
+    # 5.11 COMPARAÇÃO DO PERÍODO MAIS RECENTE
+    # --------------------------------------------------------
 
-        comparacao["VAR_pp"] = (
-            comparacao[f"TAXA_{atual}"]
-            - comparacao[f"TAXA_{anterior}"]
+    # Compara os dois últimos anos disponíveis
+    # (2022 e 2026, quando os três estão presentes).
+
+    ano_anterior = anos_turno[-2]
+    ano_atual = anos_turno[-1]
+
+    comp_recente, grandes_recente, aumentos_recente, quedas_recente = (
+        comparar_municipios(
+            mun,
+            ano_anterior,
+            ano_atual,
+            min_aptos
         )
-
-        # Considera o mínimo de eleitores aptos
-        # no ano mais recente.
-
-        grandes = comparacao[
-            comparacao[f"QT_APTOS_{atual}"] >= min_aptos
-        ].copy()
-
-        # Municípios com os maiores aumentos.
-
-        aumentos = grandes.sort_values(
-            "VAR_pp",
-            ascending=False
-        ).head(15)
-
-        # Municípios com as maiores quedas.
-
-        quedas = grandes.sort_values(
-            "VAR_pp",
-            ascending=True
-        ).head(15)
+    )
 
     # --------------------------------------------------------
-    # 4.11 RETORNO DOS RESULTADOS
+    # 5.12 RETORNO DOS RESULTADOS
     # --------------------------------------------------------
 
-    # Entrega todos os resultados organizados.
-    # Cada chave poderá ser acessada pelo processamento.py.
+    # Todos os DataFrames são disponibilizados para o frontend.
 
     resultados = {
+
+        # Base original após limpeza.
         "base": base,
+
+        # Análises gerais.
         "resumo": diag.round(2),
         "nacional": nacional.round(2),
+
+        # Análises geográficas.
         "municipios": mun,
         "estados": uf,
         "comparativo_ufs": taxa_uf.round(2),
+        "variacao_ufs": variacao_uf.round(2),
+
+        # Distribuição municipal.
         "faixas_quantidade": cont,
         "faixas_percentual": pct.round(2),
-        "estatisticas": estatisticas.round(2),
-        "comparacao_municipios": comparacao.round(2),
-        "maiores_aumentos": aumentos.round(2),
-        "maiores_quedas": quedas.round(2)
+        "distribuicao_municipal": distribuicao_municipal,
+        "estatisticas": estatisticas,
+
+        # Comparação de longo prazo.
+        "comparacao_longo_prazo": comp_longo.round(2),
+        "maiores_aumentos_longo_prazo": aumentos_longo.round(2),
+        "maiores_quedas_longo_prazo": quedas_longo.round(2),
+
+        # Comparação recente.
+        "comparacao_recente": comp_recente.round(2),
+        "maiores_aumentos": aumentos_recente.round(2),
+        "maiores_quedas": quedas_recente.round(2),
+
+        # Informações auxiliares para o frontend.
+        "anos_disponiveis": anos_turno,
+        "ano_inicial": ano_inicial,
+        "ano_final": ano_final,
+        "ano_anterior": ano_anterior,
+        "ano_atual": ano_atual
     }
 
     return resultados
