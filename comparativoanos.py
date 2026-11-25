@@ -7,7 +7,6 @@ import numpy as np
 
 from pathlib import Path
 
-
 # ============================================================
 # 2. CONFIGURAÇÕES
 # ============================================================
@@ -33,6 +32,21 @@ ARQUIVOS = {
 TURNO_COMPARACAO = 1
 EXCLUIR_EXTERIOR = False
 MIN_APTOS = 5000
+
+# Região de cada UF. "ZZ" é o código do exterior no TSE.
+
+REGIOES = {
+    "AC": "Norte", "AM": "Norte", "AP": "Norte", "PA": "Norte",
+    "RO": "Norte", "RR": "Norte", "TO": "Norte",
+    "AL": "Nordeste", "BA": "Nordeste", "CE": "Nordeste",
+    "MA": "Nordeste", "PB": "Nordeste", "PE": "Nordeste",
+    "PI": "Nordeste", "RN": "Nordeste", "SE": "Nordeste",
+    "DF": "Centro-Oeste", "GO": "Centro-Oeste",
+    "MS": "Centro-Oeste", "MT": "Centro-Oeste",
+    "ES": "Sudeste", "MG": "Sudeste", "RJ": "Sudeste", "SP": "Sudeste",
+    "PR": "Sul", "RS": "Sul", "SC": "Sul",
+    "ZZ": "Exterior"
+}
 
 
 # ============================================================
@@ -117,7 +131,7 @@ def carregar_presidente(ano, caminho):
     df = df[
         df["DS_CARGO"].astype("string").str.strip().str.casefold()
         == "presidente"
-    ].copy()
+        ].copy()
 
     # Converte as colunas numéricas.
 
@@ -145,7 +159,7 @@ def carregar_presidente(ano, caminho):
     df = df[
         (df["QT_APTOS"] > 0)
         & (df["QT_ABSTENCOES"] >= 0)
-    ].copy()
+        ].copy()
 
     # Identifica o ano eleitoral.
 
@@ -193,25 +207,25 @@ def comparar_municipios(mun, ano_anterior, ano_atual, min_aptos):
 
     dados_ant = mun[
         mun["ANO"] == ano_anterior
-    ][
+        ][
         chave + [
             "NM_MUNICIPIO",
             "QT_APTOS",
             "TAXA"
         ]
-    ].copy()
+        ].copy()
 
     # Seleciona os municípios do ano atual.
 
     dados_atual = mun[
         mun["ANO"] == ano_atual
-    ][
+        ][
         chave + [
             "NM_MUNICIPIO",
             "QT_APTOS",
             "TAXA"
         ]
-    ].copy()
+        ].copy()
 
     # Junta os municípios presentes nos dois anos.
 
@@ -228,15 +242,15 @@ def comparar_municipios(mun, ano_anterior, ano_atual, min_aptos):
     # Calcula a variação da taxa de abstenção.
 
     comparacao["VAR_pp"] = (
-        comparacao[f"TAXA_{ano_atual}"]
-        - comparacao[f"TAXA_{ano_anterior}"]
+            comparacao[f"TAXA_{ano_atual}"]
+            - comparacao[f"TAXA_{ano_anterior}"]
     )
 
     # Filtra municípios com quantidade mínima de eleitores.
 
     grandes = comparacao[
         comparacao[f"QT_APTOS_{ano_atual}"] >= min_aptos
-    ].copy()
+        ].copy()
 
     # Ordena os maiores aumentos.
 
@@ -260,10 +274,10 @@ def comparar_municipios(mun, ano_anterior, ano_atual, min_aptos):
 # ============================================================
 
 def executar_analises(
-    arquivos=None,
-    turno=TURNO_COMPARACAO,
-    excluir_exterior=EXCLUIR_EXTERIOR,
-    min_aptos=MIN_APTOS
+        arquivos=None,
+        turno=TURNO_COMPARACAO,
+        excluir_exterior=EXCLUIR_EXTERIOR,
+        min_aptos=MIN_APTOS
 ):
     """
     Executa todas as análises presentes no notebook.
@@ -333,8 +347,8 @@ def executar_analises(
     # Calcula a taxa percentual de abstenção.
 
     diag["Taxa (%)"] = (
-        diag["Abstencoes"] / diag["Aptos"]
-    ) * 100
+                               diag["Abstencoes"] / diag["Aptos"]
+                       ) * 100
 
     # --------------------------------------------------------
     # 5.3 FILTRAGEM DO TURNO
@@ -342,14 +356,14 @@ def executar_analises(
 
     b = base[
         base["NR_TURNO"] == turno
-    ].copy()
+        ].copy()
 
     # Remove o exterior se solicitado.
 
     if excluir_exterior:
         b = b[
             b["SG_UF"] != "ZZ"
-        ].copy()
+            ].copy()
 
     if b.empty:
         raise ValueError(
@@ -385,8 +399,8 @@ def executar_analises(
     # Calcula a taxa municipal de abstenção.
 
     mun["TAXA"] = (
-        mun["QT_ABSTENCOES"] / mun["QT_APTOS"]
-    ) * 100
+                          mun["QT_ABSTENCOES"] / mun["QT_APTOS"]
+                  ) * 100
 
     # --------------------------------------------------------
     # 5.5 AGRUPAMENTO POR UNIDADE FEDERATIVA
@@ -403,8 +417,46 @@ def executar_analises(
     # Calcula a taxa de abstenção de cada UF.
 
     uf["TAXA"] = (
-        uf["QT_ABSTENCOES"] / uf["QT_APTOS"]
-    ) * 100
+                         uf["QT_ABSTENCOES"] / uf["QT_APTOS"]
+                 ) * 100
+
+    # --------------------------------------------------------
+    # 5.5.1 AGRUPAMENTO POR REGIÃO
+    # --------------------------------------------------------
+
+    # Associa cada UF à sua região (ZZ = Exterior).
+
+    uf_regiao = uf.copy()
+
+    uf_regiao["REGIAO"] = (
+        uf_regiao["SG_UF"].map(REGIOES).fillna("Não identificada")
+    )
+
+    regiao = uf_regiao.groupby(
+        ["ANO", "REGIAO"],
+        as_index=False
+    ).agg(
+        QT_APTOS=("QT_APTOS", "sum"),
+        QT_ABSTENCOES=("QT_ABSTENCOES", "sum")
+    )
+
+    # Calcula a taxa de abstenção de cada região.
+
+    regiao["TAXA"] = (
+                             regiao["QT_ABSTENCOES"] / regiao["QT_APTOS"]
+                     ) * 100
+
+    # Tabela com uma coluna por ano, ordenada pela taxa
+    # do ano mais recente.
+
+    taxa_regiao = regiao.pivot(
+        index="REGIAO",
+        columns="ANO",
+        values="TAXA"
+    ).sort_values(
+        anos_turno[-1],
+        ascending=False
+    )
 
     # --------------------------------------------------------
     # 5.6 ANÁLISE NACIONAL
@@ -419,8 +471,8 @@ def executar_analises(
     # Calcula a taxa nacional.
 
     nacional["Taxa (%)"] = (
-        nacional["Abstencoes"] / nacional["Aptos"]
-    ) * 100
+                                   nacional["Abstencoes"] / nacional["Aptos"]
+                           ) * 100
 
     # Calcula a variação em pontos percentuais.
 
@@ -443,17 +495,16 @@ def executar_analises(
     # Calcula as variações entre todos os anos consecutivos.
 
     for anterior, atual in zip(
-        anos_turno[:-1],
-        anos_turno[1:]
+            anos_turno[:-1],
+            anos_turno[1:]
     ):
-
         coluna = (
             f"Variação de pontos percentuais "
             f"{anterior} - {atual} "
         )
 
         taxa_uf[coluna] = (
-            taxa_uf[atual] - taxa_uf[anterior]
+                taxa_uf[atual] - taxa_uf[anterior]
         )
 
     # Ordena pela taxa do ano mais recente.
@@ -598,6 +649,8 @@ def executar_analises(
         # Análises geográficas.
         "municipios": mun,
         "estados": uf,
+        "regioes": regiao,
+        "comparativo_regioes": taxa_regiao.round(2),
         "comparativo_ufs": taxa_uf.round(2),
         "variacao_ufs": variacao_uf.round(2),
 
